@@ -451,3 +451,109 @@ class Plant:
                 cs = np.where(Sp["hue"][:, None] < 0.5, np.asarray([255, 215, 255], np.float32),
                               np.asarray([255, 150, 235], np.float32))
                 B.add(px, py, cs * bs, Sp["rad"], np.full(len(px), 2000.0))
+
+            if wilt > 0.02:
+                F = self.fall
+                fp = np.clip((wilt * 1.05 - F["r0"] * 0.7) / 0.35, 0, 1)
+                mk = fp > 0
+                if mk.any():
+                    f = fp[mk]
+                    sx = hx + F["ox"][mk] * 0.18 * Ls_
+                    sy = hy + F["oy"][mk] * 0.18 * Ls_ + 0.25 * Ls_
+                    x = sx + (F["xl"][mk] - sx) * f + np.sin(f * 6.28 + F["ph"][mk]) * 0.03 * H * (1 - f)
+                    y = sy + (F["yl"][mk] - sy) * f * f
+                    B.add(x, y, F["col"][mk], F["rad"][mk], np.full(int(mk.sum()), 500.0))
+
+        B.draw(canvas)
+        if nodes.p:
+            x, y, col, rad, _ = [np.concatenate([q[i] for q in nodes.p]) for i in range(5)]
+            splat(canvas, x, y, np.clip(col, 0, 255).astype(np.uint8), rad, nmax=29)
+
+        C = self.cr
+        e = np.clip((t - C["delay"]) / 3.0, 0, 1)
+        sy = C["y"] - C["amp"] * np.sin(np.pi * e)
+        splat(canvas, C["x"], sy, np.clip(C["col"], 0, 255).astype(np.uint8), C["rad"])
+        return canvas
+
+
+def save_png():
+    H = 1000
+    plant = Plant(H, H)
+    times = [3.0, 9.0, 16.0, 26.0, 41.0]
+    frames = []
+    for i, tt in enumerate(times):
+        a = plant.render(tt)
+        Image.fromarray(a).save(f"flower_{i + 1}.png")
+        frames.append(Image.fromarray(a).resize((500, 500), Image.LANCZOS))
+    strip = Image.new("RGB", (500 * len(frames), 500))
+    for i, f in enumerate(frames):
+        strip.paste(f, (500 * i, 0))
+    strip.save("flower_stages.png")
+    print("Saved: flower_stages.png and stage frames")
+
+
+def save_gif(fps=12, size=640):
+    plant = Plant(size, size)
+    frames = [Image.fromarray(plant.render(i / fps)).convert("P", palette=Image.ADAPTIVE)
+              for i in range(int(T_END * fps) + 1)]
+    frames[0].save("flower.gif", save_all=True, append_images=frames[1:],
+                   duration=int(1000 / fps), loop=0, optimize=False)
+    print("Saved: flower.gif")
+
+
+class App:
+    def __init__(self):
+        import tkinter as tk
+        from PIL import ImageTk
+
+        self.root = tk.Tk()
+        self.root.title("Pointillism Flower")
+        self.root.configure(bg="black")
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        H = int(min(sh * WIN_FRAC, sw * 0.96))
+        W = H
+        self.root.geometry(f"{W}x{H}+{(sw - W) // 2}+{max(0, (sh - H) // 2 - 20)}")
+        self.cv = tk.Canvas(self.root, width=W, height=H, bg="black", highlightthickness=0)
+        self.cv.pack(fill="both", expand=True)
+        self.cv.create_text(W // 2, H // 2, text="preparing...", fill="#777777")
+        self.root.update()
+
+        self.plant = Plant(W, H)
+        self.photo = ImageTk.PhotoImage(Image.fromarray(self.plant.render(0)))
+        self.cv.delete("all")
+        self.cv.create_image(0, 0, anchor="nw", image=self.photo)
+        self.root.bind("<Escape>", lambda e: self.root.destroy())
+        self.root.bind("<space>", lambda e: self.toggle())
+        self.root.bind("<r>", lambda e: self.restart())
+        self.root.bind("<s>", lambda e: Image.fromarray(self.plant.render(self.clock / TIME_SCALE)).save("flower_frame.png"))
+        self.clock, self.last, self.paused = 0.0, time.perf_counter(), False
+        self.tick()
+
+    def toggle(self):
+        self.paused = not self.paused
+
+    def restart(self):
+        self.clock = 0.0
+
+    def tick(self):
+        now = time.perf_counter()
+        if not self.paused:
+            self.clock += now - self.last
+        self.last = now
+        t = self.clock / TIME_SCALE
+        if LOOP and t > T_END + 4:
+            self.clock, t = 0.0, 0.0
+        self.photo.paste(Image.fromarray(self.plant.render(t)))
+        self.root.after(TICK_MS, self.tick)
+
+    def run(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    if "--png" in sys.argv:
+        save_png()
+    elif "--gif" in sys.argv:
+        save_gif()
+    else:
+        App().run()
